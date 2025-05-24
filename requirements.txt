@@ -1,0 +1,7 @@
+google-cloud-aiplatform
+pymupdf
+requests
+google-generativeai
+google-genai
+google-cloud-storage
+pypdf
