@@ -1,10 +1,9 @@
-import google.generativeai as genai
 import os
-from pathlib import Path
-from pypdf import PdfReader
+import google.generativeai as genai
+from dotenv import load_dotenv
 from google.cloud import storage
 from google.oauth2 import service_account
-from dotenv import load_dotenv
+from pypdf import PdfReader
 
 load_dotenv()
 
@@ -24,7 +23,7 @@ storage_client = storage.Client(credentials=creds, project=creds.project_id)
 src_bucket = storage_client.bucket(SOURCE_BUCKET)
 dest_bucket = storage_client.bucket(DEST_BUCKET)
 
-def extract_with_pypdf(path: str) -> tuple[str, int]:
+def extract_text_from_pdf(path: str) -> tuple[str, int]:
     reader = PdfReader(path)
     pages  = [page.extract_text() or "" for page in reader.pages]
     return "\n".join(pages), len(reader.pages)
@@ -68,14 +67,14 @@ def process_blob(blob):
     print(f"Extracting file: {blob.name}")
 
     # ⬇️  unpack both values
-    pdf_text, page_count = extract_with_pypdf(local_pdf)
+    pdf_text, page_count = extract_text_from_pdf(local_pdf)
 
     summary = summarize_text(pdf_text, page_count)
 
     base_name       = os.path.splitext(local_pdf)[0]
-    dest_blob_name  = f"{DEST_PREFIX}{base_name}_summary.json"
+    dest_blob_name  = f"{DEST_PREFIX}{base_name}_summary.md"
     dest_bucket.blob(dest_blob_name).upload_from_string(
-        summary, content_type="application/json"
+        summary, content_type="application/markdown"
     )
     print(f"Uploaded gs://{DEST_BUCKET}/{dest_blob_name}")
     os.remove(local_pdf)
