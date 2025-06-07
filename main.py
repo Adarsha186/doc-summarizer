@@ -1,18 +1,29 @@
 import os
+import tempfile
+
 import google.generativeai as genai
 from dotenv import load_dotenv
-from google.cloud import storage
+from google.cloud import storage, secretmanager
 from google.oauth2 import service_account
 from pypdf import PdfReader
 
 load_dotenv()
 
+GCP_PROJECT_ID = "secret-timing-460814-i4"
 SOURCE_BUCKET = "pdf_summarize"
 SOURCE_PREFIX = "pdfs/"
 DEST_BUCKET = "pdf_summarize_results"
 DEST_PREFIX = "summaries/"
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-GOOGLE_SA_KEY = os.getenv("GOOGLE_SA_KEY")
+
+def access_secret(secret_name: str) -> str:
+    client = secretmanager.SecretManagerServiceClient()
+    project_id = GCP_PROJECT_ID
+    secret_path = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
+    response = client.access_secret_version(request={"name": secret_path})
+    return response.payload.data.decode("UTF-8")
+
+GOOGLE_API_KEY = access_secret("GOOGLE_API_KEY")
+GOOGLE_SA_KEY = access_secret("GOOGLE_SA_KEY")
 
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
@@ -30,10 +41,6 @@ def extract_text_from_pdf(path: str) -> tuple[str, int]:
 
 # --- replace summarize_text -----------------------------
 def summarize_text(raw_text: str, pages: int) -> str:
-    """
-    Ask Gemini to produce a structured summary.
-    Uses a single user prompt; no unsupported 'system' role.
-    """
     prompt = f"""You are an *expert document summarizer*.
 
                 Summarize the document below using **exactly** this structure:
@@ -56,48 +63,27 @@ def summarize_text(raw_text: str, pages: int) -> str:
         }
     )
     return response.text
-# ---------------------------------------------------------
 
 
+def summarize_pdf_gcs_trigger(event, context):
+    file_name = event["name"]
+    if not file_name.endswith(".pdf"):
+        print(f"Skipped non-PDF: {file_name}")
+        return
 
+    bucket = storage_client.bucket(event["bucket"])
+    blob = bucket.blob(file_name)
 
-def process_blob(blob):
-    local_pdf = blob.name.split("/")[-1]
-    blob.download_to_filename(local_pdf)
-    print(f"Extracting file: {blob.name}")
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        blob.download_to_filename(tmp.name)
+        print(f"Downloaded {file_name} to {tmp.name}")
 
-    # ⬇️  unpack both values
-    pdf_text, page_count = extract_text_from_pdf(local_pdf)
+        pdf_text, page_count = extract_text_from_pdf(tmp.name)
+        summary = summarize_text(pdf_text, page_count)
 
-    summary = summarize_text(pdf_text, page_count)
-
-    base_name       = os.path.splitext(local_pdf)[0]
-    dest_blob_name  = f"{DEST_PREFIX}{base_name}_summary.md"
-    dest_bucket.blob(dest_blob_name).upload_from_string(
-        summary, content_type="application/markdown"
-    )
-    print(f"Uploaded gs://{DEST_BUCKET}/{dest_blob_name}")
-    os.remove(local_pdf)
-
-    console_url = (
-        "https://console.cloud.google.com/storage/browser/_details/"
-        f"{DEST_BUCKET}/{dest_blob_name}"
-    )
-    print(f"Console link: {console_url}")
-
-
-
-if __name__ == "__main__":
-    pdf_blobs = [
-        b for b in src_bucket.list_blobs(prefix=SOURCE_PREFIX)
-        if b.name.lower().endswith(".pdf")
-    ]
-
-    if not pdf_blobs:
-        print("No PDF files found.")
-    else:
-        for blob in pdf_blobs:
-            try:
-                process_blob(blob)
-            except Exception as e:
-                print(f"Failed on {blob.name}: {e}")
+        base_name = os.path.splitext(os.path.basename(file_name))[0]
+        dest_blob_name = f"{DEST_PREFIX}{base_name}_summary.md"
+        dest_bucket.blob(dest_blob_name).upload_from_string(
+            summary, content_type="application/markdown"
+        )
+        print(f"Uploaded gs://{DEST_BUCKET}/{dest_blob_name}")

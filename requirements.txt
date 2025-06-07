@@ -5,3 +5,4 @@ google-generativeai
 google-genai
 google-cloud-storage
 pypdf
+google-cloud-secret-manager
