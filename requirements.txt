@@ -1,5 +1,5 @@
+functions-framework==3.*
 google-cloud-aiplatform
-pymupdf
 requests
 google-generativeai
 google-genai
